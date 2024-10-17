@@ -1,5 +1,6 @@
 import math
 import os
+from functools import cached_property
 from typing import Optional
 
 import torch
@@ -281,7 +282,58 @@ class ChameleonDecoder(nn.Module):
             return hidden_states
 
 
-class Chameleon(BaseModel):
+class ChameleonImageVocabularyMapping:
+    """
+    A class for mapping discrete image tokens from VQGAN to BPE tokens.
+ 
+    Reference:
+    https://github.com/Alpha-VLLM/Lumina-mGPT/blob/104abe453ec1acca5863698629c4db2111b0b3fc/lumina_mgpt/model/chameleon/modeling_chameleon.py#L1036
+    """
+
+    def __init__(self, vocab_map):
+        self.vocab_map = vocab_map
+        self.image_token_id = vocab_map.get("<image>")
+
+    @cached_property
+    def val2name(self):
+        return {v: k for k, v in self.vocab_map.items()}
+
+    @cached_property
+    def image_tokens(self):
+        return sorted([val for name, val in self.vocab_map.items() if name.startswith("IMGIMG")])
+
+    @cached_property
+    def bpe2img(self):
+        img_tkn_chr_mapping = {chr(ord("A") + i): str(i) for i in range(10)}
+
+        def remap(old_name: str) -> str:
+            return "".join(img_tkn_chr_mapping.get(c, c) for c in old_name[len("IMGIMG") : -1])
+
+        return {tok: int(remap(self.val2name[tok])) for tok in self.image_tokens}
+
+    @cached_property
+    def img2bpe(self):
+        return {v: k for k, v in self.bpe2img.items()}
+
+    @cached_property
+    def bpe2img_search_tensors(self):
+        return torch.tensor(sorted(self.bpe2img.keys())), torch.tensor(sorted(self.bpe2img.values()))
+
+    @cached_property
+    def img2bpe_mapping_tensor(self):
+        mapping = torch.zeros(max(self.img2bpe.keys()) + 1, dtype=torch.int)
+        for k, v in self.img2bpe.items():
+            mapping[k] = v
+        return mapping
+
+    def convert_img2bpe(self, img_batch: torch.Tensor) -> torch.Tensor:
+        device = img_batch.device
+        img_tokens = self.img2bpe_mapping_tensor[img_batch.to("cpu")]
+        return img_tokens.to(device)
+
+
+
+class ChameleonModel(BaseModel):
     """
     Chameleon Model.
 
@@ -382,7 +434,7 @@ class Chameleon(BaseModel):
 
         self.layers = nn.ModuleList(
             [
-                Llama2Decoder(
+                ChameleonDecoder(
                     hidden_size=hidden_size,
                     num_attention_heads=num_attention_heads,
                     num_kv_attention_heads=num_kv_attention_heads,
@@ -534,6 +586,8 @@ class Chameleon(BaseModel):
                 split_size,
                 dim=row_dim,
             )[local_rank]
+
+            # TODO(zhhsplendid): add qk norm?
 
             # attn norm
             state_dict[f"layers.{i}.attention_norm.weight"] = state_dict.pop(
