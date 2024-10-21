@@ -5,7 +5,11 @@ from typing import Optional
 
 import torch
 from torch import nn
+from torch.nn import CrossEntropyLoss
 from tqdm import tqdm
+
+# Should re-implement CausalLMOutputWithPast?
+from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 
 from internlm.accelerator import get_accelerator
 from internlm.core.context import ParallelMode
@@ -423,9 +427,9 @@ class ChameleonModel(BaseModel):
         self.embed_grad_scale = embed_grad_scale
         self.parallel_output = parallel_output
 
+        
         if first:
             self.tok_embeddings = Embedding1D(num_embeddings=vocab_size, embedding_dim=hidden_size)
-
             for _, param in self.tok_embeddings.named_parameters():
                 if init_type == "normal":
                     normal_(std=embedding_init_std)(param)
@@ -468,6 +472,10 @@ class ChameleonModel(BaseModel):
             ]
         )
 
+        self.norm = new_layer_norm(norm_type, hidden_size, eps=layer_norm_epsilon)
+        self.output = None
+
+        '''
         if last:
             if not apply_post_layer_norm:
                 self.norm = new_layer_norm(norm_type, hidden_size, eps=layer_norm_epsilon)
@@ -488,6 +496,7 @@ class ChameleonModel(BaseModel):
                     normal_(std=out_head_init_std)(param)
                 else:
                     uniform_(std=out_head_init_std)(param)
+        '''
 
     def forward(self, hidden_states=None, input_ids=None, **kwargs):
         # attention_mask: compute attention on the places where the value is 1
@@ -587,7 +596,7 @@ class ChameleonModel(BaseModel):
                 dim=row_dim,
             )[local_rank]
 
-            # TODO(zhhsplendid): add qk norm?
+            # TODO(zhhsplendid): add qk norm and mapping parameter names?
 
             # attn norm
             state_dict[f"layers.{i}.attention_norm.weight"] = state_dict.pop(
@@ -760,3 +769,100 @@ class ChameleonModel(BaseModel):
             llm_save(save_path=os.path.join(tgt, shard_file), saved_obj=shard, metadata={"format": "pt"})
         if index is not None:
             llm_save(save_path=os.path.join(tgt, SAFE_WEIGHTS_INDEX_NAME), saved_obj=index)
+
+
+class ChameleonForConditionalGeneration(BaseModel):
+    def __init__(self,
+                 max_position_embeddings: int
+                 output_attentions: bool,
+                 output_hidden_states: bool,
+                 return_dict: bool,
+                 mask_image_logits: bool):
+        self.max_position_embeddings = max_position_embeddings
+
+        self.model = ChameleonModel(...)
+
+        self.output_attentions = output_attentions
+        self.output_hidden_states = output_hidden_states
+        self.return_dict = return_dict
+        self.mask_image_logits = mask_image_logits
+
+    def forward(self,
+                input_ids=None,
+                labels=None,
+                pixel_values: torch.FloatTensor = None,
+                attention_mask: Optional[torch.Tensor] = None,
+                position_ids: Optional[torch.LongTensor] = None,
+                past_key_values: Optional[Cache] = None,
+                inputs_embeds: Optional[torch.FloatTensor] = None,
+                use_cache: Optional[bool] = None,
+                output_attentions: Optional[bool] = None,
+                output_hidden_states: Optional[bool] = None,
+                return_dict: Optional[bool] = None,
+                cache_position: Optional[torch.LongTensor] = None,
+                **kwargs):
+
+
+
+
+        # Data to torch.tensor
+        max_tokens = max([len(_) for _ in input_ids])
+        max_tokens = min(max_tokens, self.max_position_embeddings)
+        input_ids = [_[:max_tokens] for _ in input_ids]
+        labels = [_[:max_tokens] for _ in labels]
+        input_ids = [example + [0] * (max_tokens - len(example)) for example in input_ids]
+        input_ids = torch.tensor(input_ids, dtype=torch.int64, device=self.device)
+        labels = [label + [-100] * (max_tokens - len(label)) for label in labels]
+        labels = torch.tensor(labels, dtype=torch.int64, device=self.device)
+
+
+        outputs = self.model(
+            input_ids=input_ids,
+            pixel_values=pixel_values,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+            cache_position=cache_position,
+        )
+
+        hidden_states = outputs[0]
+        logits = self.lm_head(hidden_states)
+        logits = logits.float()
+
+        if self.mask_image_logits:
+            # Disallow image tokens which does not include special begin-image and end-image tokens
+            image_tokens = self.model.vocabulary_mapping.image_tokens
+            logits[:, :, image_tokens] = torch.finfo(logits.dtype).min
+
+        loss = None
+        if labels is not None:
+            # Shift so that tokens < n predict n
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            # Flatten the tokens
+            loss_fct = CrossEntropyLoss()
+            shift_logits = shift_logits.view(-1, self.config.vocab_size)
+            shift_labels = shift_labels.view(-1)
+            # Enable model parallelism
+            shift_labels = shift_labels.to(shift_logits.device)
+            loss = loss_fct(shift_logits, shift_labels)
+
+        if not self.return_dict:
+            output = (logits,) + outputs[1:]
+            return (loss,) + output if loss is not None else output
+
+        return CausalLMOutputWithPast(
+            loss=loss,
+            logits=logits,
+            past_key_values=outputs.past_key_values,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
+
+
+
