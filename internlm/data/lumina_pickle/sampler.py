@@ -9,27 +9,24 @@ from internlm.utils.logger import get_logger
 
 logger = get_logger(__file__)
 
-class FinetuneDistSampler(Sampler):
+# Modified from https://github.com/Alpha-VLLM/Lumina-mGPT/blob/104abe453ec1acca5863698629c4db2111b0b3fc/xllmx/data/sampler.py#L50
+class LuminaPickleSampler(Sampler):
     def __init__(
         self,
         dataset: LuminaPickleDataset,
-        num_replicas: Optional[int] = None,
-        rank: Optional[int] = None,
+        micro_batch_size: int,
+        acc_grad: int,
         shuffle: bool = True,
         seed: int = 0,
-        batch_size=None,
-        acc_grad=1,
         length_clustering=True,
         allow_mixed_task_among_acc=False,
     ):
         """
         Distributed Sampler ensuring data in a batch are of the same type (e.g. text, image-text)
         :param dataset:
-        :param num_replicas: should be DP size
-        :param rank: should be dp rank
         :param shuffle:
         :param seed:
-        :param batch_size:
+        :param micro_batch_size:
         :param acc_grad:
         :param length_clustering:
         :param allow_mixed_task_among_acc:
@@ -38,14 +35,15 @@ class FinetuneDistSampler(Sampler):
 
         if num_replicas is None or rank is None or rank >= num_replicas or rank < 0:
             raise ValueError(f"Invalid num_replicas ({num_replicas}) or rank ({rank})")
-        assert batch_size is not None
+        assert micro_batch_size is not None
+        assert acc_grad is not None
 
         self.dataset = dataset
-        self.num_replicas = num_replicas
-        self.rank = rank
+        self.num_replicas = gpc.get_world_size(ParallelMode.DATA)
+        self.rank = gpc.get_local_rank(ParallelMode.DATA)
         self.shuffle = shuffle
         self.seed = seed
-        self.batch_size = batch_size
+        self.micro_batch_size = micro_batch_size
         self.acc_grad = acc_grad
         self.length_clustering = length_clustering
         self.allow_mixed_task_among_acc = allow_mixed_task_among_acc
@@ -53,7 +51,7 @@ class FinetuneDistSampler(Sampler):
         self.epoch = 0
         self.start_iter = 0
 
-        global_bsz_acc = batch_size * num_replicas * acc_grad
+        global_bsz_acc = micro_batch_size * num_replicas * acc_grad
 
         group_len = defaultdict(int)
         for i, meta in enumerate(dataset.meta_list):
@@ -66,8 +64,8 @@ class FinetuneDistSampler(Sampler):
         self.num_samples = self.total_size // num_replicas
 
     def __iter__(self) -> Iterator:
-        global_batch_size = self.batch_size * self.num_replicas
-        global_bsz_acc = self.batch_size * self.num_replicas * self.acc_grad
+        global_batch_size = self.micro_batch_size * self.num_replicas
+        global_bsz_acc = self.micro_batch_size * self.num_replicas * self.acc_grad
         rng = np.random.default_rng(self.seed + self.epoch)
 
         group_indices_and_len = defaultdict(list)
@@ -147,15 +145,15 @@ class FinetuneDistSampler(Sampler):
         assert len(indices) == self.total_size
 
         own_indices = []
-        for start_pos in range(self.rank * self.batch_size, len(indices), self.num_replicas * self.batch_size):
-            own_indices += indices[start_pos : start_pos + self.batch_size]
+        for start_pos in range(self.rank * self.micro_batch_size, len(indices), self.num_replicas * self.micro_batch_size):
+            own_indices += indices[start_pos : start_pos + self.micro_batch_size]
         # subsample
         assert len(own_indices) == self.num_samples
 
-        if self.start_iter * self.batch_size > len(own_indices):
+        if self.start_iter * self.micro_batch_size > len(own_indices):
             own_indices = []
         else:
-            own_indices = own_indices[self.start_iter * self.batch_size :]
+            own_indices = own_indices[self.start_iter * self.micro_batch_size :]
 
         return iter(own_indices)
 

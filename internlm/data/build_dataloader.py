@@ -214,12 +214,10 @@ def get_mock_train_loader_items(data_cfg):
     return train_ds, train_sampler, train_collate_fn
 
 def get_lumina_pickle_loader_items(data_cfg):
-    train_ds = LuminaPickleDataset(
-        #TODO
-    )
-    train_sampler = #TODO
-    #MockedSequentialBatchSampler(train_ds, data_cfg.micro_num)
-    train_collate_fn = #TODO #partial(packed_collate_fn, packed_length=data_cfg.seq_len * data_cfg.micro_bsz)
+    train_ds = LuminaPickleDataset(data_cfg.data_yaml)
+    train_sampler = LuminaPickleSampler(train_ds, micro_batch_size=data_cfg.micro_bsz, acc_grad=data_cfg.micro_num)
+    # TODO(zhenghuihuang): Can we reuse existing collate function?
+    train_collate_fn = partial(packed_collate_fn, packed_length=data_cfg.seq_len * data_cfg.micro_bsz)
     return train_ds, train_sampler, train_collate_fn
 
 def build_train_loader_with_data_type():

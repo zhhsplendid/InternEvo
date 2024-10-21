@@ -13,10 +13,7 @@ from internlm.utils.logger import get_logger
 logger = get_logger(__file__)
 
 class LuminaPickleDataset(Dataset):
-    def __init__(self,
-                 data_yaml: str,
-                 micro_bsz: int,
-                 micro_num: int):
+    def __init__(self, data_yaml: str):
         logger.info(f"read data meta yaml from {data_yaml}")
         # TODO(zhenghuihuang): cache to disk?
         self.meta_list, self.record_list = self._load_data_yaml(data_yaml)
