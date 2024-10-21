@@ -2,7 +2,7 @@ JOB_NAME = "34b_chameleon_train"
 model_type = "CHAMELEON"
 DO_ALERT = False
 
-SEQ_LEN = 2048
+SEQ_LEN = 2048 # 4096? Le Zhuo's message is different to model config file
 HIDDEN_SIZE = 8192
 NUM_ATTENTION_HEAD = 64
 NUM_KV_ATTENTION_HEAD = 8
@@ -119,21 +119,21 @@ loss = dict(
     label_smoothing=0,
 )
 
-i#https://github.com/Alpha-VLLM/Lumina-mGPT/blob/104abe453ec1acca5863698629c4db2111b0b3fc/xllmx/solvers/finetune/finetune.py#L363
+# Reference from Le Zhuo's message
 adam = dict(
     lr=2e-5,
     adam_beta1=0.9,
     adam_beta2=0.95,
     adam_beta2_c=0,
     adam_eps=1e-8,
-    weight_decay=0.0,
+    weight_decay=0.1,
+    clip_grad=4.0,
 )
 
 lr_scheduler = dict(
     total_steps=data["total_steps"],
     init_steps=0,  # optimizer_warmup_step
-    # 0.01 in original 7B Llama script, Lumina has warmup_epoch=0.03, Huihuang not sure whether this warmpup_ratio is the same meaning
-    warmup_ratio=0.03,
+    warmup_ratio=0.01,
     eta_min=1e-5,
     last_epoch=-1,
 )

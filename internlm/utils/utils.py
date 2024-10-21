@@ -63,6 +63,7 @@ class DataType(Enum):
     tokenized = 2
     megatron = 3
     mocked = 4
+    lumina_pickle = 5
 
 
 class TensorParallelMode(Enum):

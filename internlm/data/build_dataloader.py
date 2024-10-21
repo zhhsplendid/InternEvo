@@ -213,6 +213,14 @@ def get_mock_train_loader_items(data_cfg):
     train_collate_fn = partial(packed_collate_fn, packed_length=data_cfg.seq_len * data_cfg.micro_bsz)
     return train_ds, train_sampler, train_collate_fn
 
+def get_lumina_pickle_loader_items(data_cfg):
+    train_ds = LuminaPickleDataset(
+        #TODO
+    )
+    train_sampler = #TODO
+    #MockedSequentialBatchSampler(train_ds, data_cfg.micro_num)
+    train_collate_fn = #TODO #partial(packed_collate_fn, packed_length=data_cfg.seq_len * data_cfg.micro_bsz)
+    return train_ds, train_sampler, train_collate_fn
 
 def build_train_loader_with_data_type():
     """
@@ -237,6 +245,9 @@ def build_train_loader_with_data_type():
     elif data_cfg.type == DataType.mocked.name:
         train_ds, train_sampler, train_collate_fn = get_mock_train_loader_items(data_cfg)
         # TODO: support more dataset_types
+        dataset_types = ["en"]
+    elif data_cfg.type == DataType.lumina_pickle.name:
+        train_ds, train_sampler, train_collate_fn = get_lumina_pickle_loader_items(data_cfg) 
         dataset_types = ["en"]
     else:
         raise ValueError(f"dataset type {data_cfg.type} is not supported")
