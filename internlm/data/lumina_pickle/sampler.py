@@ -1,3 +1,7 @@
+import copy
+from collections import defaultdict
+from typing import Iterator, List, Optional
+
 import numpy as np
 
 import torch
@@ -9,11 +13,40 @@ from internlm.utils.logger import get_logger
 
 logger = get_logger(__file__)
 
+class LuminaPickleBatchSampler(Sampler):
+    def __init__(
+        self,
+        dataset,
+        micro_batch_size: int,
+        acc_grad: int,
+        shuffle: bool = True,
+        seed: int = 0,
+        length_clustering=True,
+        allow_mixed_task_among_acc=False,
+    ):
+        self.single_sampler = LuminaPickleSampler(dataset, micro_batch_size, acc_grad, shuffle, seed, length_clustering, allow_mixed_task_among_acc)
+        self.num_batches = len(dataset) // micro_batch_size // gpc.get_world_size(ParallelMode.DATA)
+        self.micro_batch_size = micro_batch_size
+
+    def __iter__(self):
+        single_iter = iter(self.single_sampler)
+        for i in range(self.num_batches):
+            ret = [next(single_iter) for _ in range(self.micro_batch_size)]
+            yield ret
+
+    def __len__(self):
+        return self.num_batches
+
+    def copy(self):
+        return copy.deepcopy(self)
+
+
+
 # Modified from https://github.com/Alpha-VLLM/Lumina-mGPT/blob/104abe453ec1acca5863698629c4db2111b0b3fc/xllmx/data/sampler.py#L50
 class LuminaPickleSampler(Sampler):
     def __init__(
         self,
-        dataset: LuminaPickleDataset,
+        dataset,
         micro_batch_size: int,
         acc_grad: int,
         shuffle: bool = True,
@@ -33,14 +66,14 @@ class LuminaPickleSampler(Sampler):
         """
         # super().__init__()
 
-        if num_replicas is None or rank is None or rank >= num_replicas or rank < 0:
-            raise ValueError(f"Invalid num_replicas ({num_replicas}) or rank ({rank})")
         assert micro_batch_size is not None
         assert acc_grad is not None
 
         self.dataset = dataset
         self.num_replicas = gpc.get_world_size(ParallelMode.DATA)
         self.rank = gpc.get_local_rank(ParallelMode.DATA)
+        #if num_replicas is None or rank is None or rank >= num_replicas or rank < 0:
+        #    raise ValueError(f"Invalid num_replicas ({num_replicas}) or rank ({rank})")
         self.shuffle = shuffle
         self.seed = seed
         self.micro_batch_size = micro_batch_size
@@ -51,7 +84,7 @@ class LuminaPickleSampler(Sampler):
         self.epoch = 0
         self.start_iter = 0
 
-        global_bsz_acc = micro_batch_size * num_replicas * acc_grad
+        global_bsz_acc = micro_batch_size * self.num_replicas * acc_grad
 
         group_len = defaultdict(int)
         for i, meta in enumerate(dataset.meta_list):
@@ -60,10 +93,10 @@ class LuminaPickleSampler(Sampler):
         group_len = {key: val // global_bsz_acc * global_bsz_acc for key, val in group_len.items()}
 
         self.total_size = sum(list(group_len.values()))
-        assert self.total_size % num_replicas == 0
-        self.num_samples = self.total_size // num_replicas
+        assert self.total_size % self.num_replicas == 0
+        self.num_samples = self.total_size // self.num_replicas
 
-    def __iter__(self) -> Iterator:
+    def __iter__(self):
         global_batch_size = self.micro_batch_size * self.num_replicas
         global_bsz_acc = self.micro_batch_size * self.num_replicas * self.acc_grad
         rng = np.random.default_rng(self.seed + self.epoch)
@@ -147,6 +180,7 @@ class LuminaPickleSampler(Sampler):
         own_indices = []
         for start_pos in range(self.rank * self.micro_batch_size, len(indices), self.num_replicas * self.micro_batch_size):
             own_indices += indices[start_pos : start_pos + self.micro_batch_size]
+     
         # subsample
         assert len(own_indices) == self.num_samples
 
@@ -154,8 +188,9 @@ class LuminaPickleSampler(Sampler):
             own_indices = []
         else:
             own_indices = own_indices[self.start_iter * self.micro_batch_size :]
-
+        
         return iter(own_indices)
+
 
     def __len__(self) -> int:
         return self.num_samples
@@ -172,3 +207,7 @@ class LuminaPickleSampler(Sampler):
         """
         self.epoch = epoch
         self.start_iter = start_iter
+
+    def copy(self):
+        return copy.deepcopy(self)
+

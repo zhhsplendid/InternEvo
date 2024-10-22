@@ -461,6 +461,7 @@ class GQA(nn.Module):
                 rotary_type="dynamic_ntk" if self.use_dynamic_ntk_rope else "native",
             )
 
+        self.qk_norm = qk_norm
         if qk_norm:
             assert enable_qkv_fusion is False, "qk_norm cannot be applied when fused wqkv"
 
@@ -516,7 +517,7 @@ class GQA(nn.Module):
             q = rearrange(q, "b s h gs d -> b s (h gs) d")
         else:
             q, k, v = self.wq(x), self.wk(x), self.wv(x)
-            if qk_norm:
+            if self.qk_norm:
                 q = self.q_norm(q)
                 k = self.k_norm(k)
             q = rearrange(q, "b s (h d) -> b s h d", d=self.head_dim)

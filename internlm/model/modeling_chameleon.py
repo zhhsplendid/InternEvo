@@ -473,7 +473,6 @@ class ChameleonModel(BaseModel):
         )
 
         self.norm = new_layer_norm(norm_type, hidden_size, eps=layer_norm_epsilon)
-        self.output = None
 
         '''
         if last:
@@ -769,18 +768,18 @@ class ChameleonModel(BaseModel):
             llm_save(save_path=os.path.join(tgt, shard_file), saved_obj=shard, metadata={"format": "pt"})
         if index is not None:
             llm_save(save_path=os.path.join(tgt, SAFE_WEIGHTS_INDEX_NAME), saved_obj=index)
-
+'''
 
 class ChameleonForConditionalGeneration(BaseModel):
     def __init__(self,
-                 max_position_embeddings: int
+                 max_position_embeddings: int,
                  output_attentions: bool,
                  output_hidden_states: bool,
                  return_dict: bool,
                  mask_image_logits: bool):
         self.max_position_embeddings = max_position_embeddings
 
-        self.model = ChameleonModel(...)
+        self.model = ChameleonModel()
 
         self.output_attentions = output_attentions
         self.output_hidden_states = output_hidden_states
@@ -864,5 +863,5 @@ class ChameleonForConditionalGeneration(BaseModel):
             attentions=outputs.attentions,
         )
 
-
+'''
 
